@@ -5,11 +5,12 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn.functional as F
 import torch.utils.data
 import os
 import numpy as np
+import joblib
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class MDADData(torch.utils.data.Dataset):
     def __init__(self,x,y):
@@ -142,6 +143,7 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
             data_train, data_val = torch.utils.data.random_split(data,(train_sz,val_sz))
             trainloader = torch.utils.data.DataLoader(data_train,batch_size=10,shuffle=True)
         else:
+            data_train = data
             trainloader = torch.utils.data.DataLoader(data,batch_size=10,shuffle=True)
         i = 0
         scheduler = ReduceLROnPlateau(optimizer, 'min')
@@ -168,21 +170,22 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
                     losses.append((loss_train.detach(), loss_val.detach()))
                 else:
                     output = model(data['features'])
-                    cur_losses_train = [loss_list[i](output_train[i].flatten(),data_train[:]['traits'][:,i]) for i in range(len(loss_list))]
+                    cur_losses_train = [loss_list[i](output_train[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
                     cur_losses_train = torch.stack(cur_losses_train)
-                    loss_train =  cur_losses_train[~torch.isnan(cur_losses_train)].sum()
+                    loss_train =  cur_losses_train.sum()
                     losses.append(loss_train)
             else:
-                cur_losses = [loss_list[i](output[i],data['traits'][i]) for i in range(len(loss_list))]
-                cur_losses = torch.stack(cur_losses)
-                cur_losses = cur_losses[~torch.isnan(cur_losses)].sum()
+                output = model(data_train[:]['features'])
+                cur_losses_train = [loss_list[i](output[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
+                cur_losses_train = torch.stack(cur_losses_train)
+                loss_train =  cur_losses_train.sum()
             scheduler.step(loss_train)
 
             if verbose:
                 if use_validation:
                     print("Loss at epoch {}: train: {}, validation: {}".format(i,loss_train, loss_val))
                 else:
-                    print("Loss at epoch {}: {}".format(i,loss_tot))
+                    print("Loss at epoch {}: {}".format(i,loss_train))
             i += 1
         if save_loss:
             if use_validation:
@@ -205,3 +208,41 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
     return model.cpu(), loss_tot
 
 
+def run_single_training(trainloader, model, epochs=200):
+    loss = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer, 'min')
+    i = 0
+    while(i < epochs):
+        for data in trainloader:
+            optimizer.zero_grad()
+            output = model(data['features'])
+            cur_loss = loss(output, data['traits'])
+            cur_loss.backward()
+            optimizer.step()
+        scheduler.step(cur_loss)
+        i+= 1
+
+
+def train_single_models(features, traits, num_cores = 6, verbose=False, plot_loss=False, save_loss=False, save_model=False):
+    n = features.shape[0]
+    num_traits = traits.shape[1]
+    input_size = features.shape[1]
+    linear_models = [NestedLinear(input_size=input_size).double() for _ in range(num_traits)]
+    mlp_models = [MLP(input_size=input_size).double() for _ in range(num_traits)]
+    if torch.cuda.is_available():
+        linear_models = [model.cuda() for model in linear_models]
+        mlp_models = [model.cuda() for model in mlp_models]
+        features = features.cuda()
+        traits = traits.cuda()
+    data_sets = [SingleClassData(features[~torch.isnan(traits[:,i]),:], traits[~torch.isnan(traits[:,i]),:], i) for i in range(num_traits)]
+    trainloaders = [torch.utils.data.DataLoader(data,batch_size=10,shuffle=True) for data in data_sets]
+    inputs = [elem for elem in zip(trainloaders,linear_models)] +\
+        [elem for elem in zip(trainloaders,mlp_models)]
+    with joblib.parallel_backend('loky', n_jobs=num_cores):
+        joblib.Parallel()(
+            joblib.delayed(run_single_training)(trainloader,model)
+            for trainloader,model in inputs)
+    linear_models = [linear.cpu() for linear in linear_models]
+    mlp_models = [mlp.cpu() for mlp in mlp_models]
+    return linear_models, mlp_models

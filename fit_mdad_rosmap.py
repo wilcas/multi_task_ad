@@ -16,10 +16,10 @@ def main():
     model, loss = train_MDAD(
         torch.tensor(exp_data.astype(np.float64)),
         torch.tensor(phen_data.astype(np.float64)),
-        plot_loss=True,
-        save_loss="/home/wcasazza/saved_mdad_norm_phen.png",
-        save_model = "/home/wcasazza/saved_mdad_norm_phen.pt",
-        use_validation=True,
+        plot_loss=False,
+        #save_loss="/home/wcasazza/saved_mdad_norm_phen.png",
+        #save_model = "/home/wcasazza/saved_mdad_norm_phen.pt",
+        use_validation=False,
         verbose = True)
 
 
