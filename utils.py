@@ -29,11 +29,15 @@ def match_samples(*samples):
         shared_idx.append(np.extract(to_keep, indices))
     return shared_idx
 
-def integrated_gradients(model,base_data,input_data):
-    base_outs = model(base_data)
-    baselines = [torch.mean(out) for out in base_outs]
-    activations = model(input_data)
-    return [activation - baseline for (activation, baseline) in zip(activations,baselines)]
+def integrated_gradients(model,base_data,input_data, num_iter=50):
+    grads = torch.zeros(input_data.shape)
+    for i in num_iter:
+        var = torch.tensor(base_data + (float(i)/num_iter) * (input_data - base_data), requires_grad=True)
+        output = model(var)
+        output.backward()
+        grads += var.grad.detach()
+    return (input_data - base_data) / num_iter
+
 
 def get_pre_split(model,data):
     activations = []

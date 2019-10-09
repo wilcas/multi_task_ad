@@ -31,10 +31,52 @@ class MDADData(torch.utils.data.Dataset):
         sample = {'features': self.x[index,:], 'traits': self.y[index,:]}
         return sample
 
+class SingleClassData(torch.utils.data.Dataset):
+    def __init__(self,x,y,cur_trait):
+        super(SingleClassData, self).__init__()
+        self.x = x
+        self.y = y
+        self.cur_trait = cur_trait
 
-class MLP(nn.module):
+
+    def __len__(self):
+        if self.x.shape[0] != self.y.shape[0]:
+            raise ValueError(
+                "Data and response have dimension mismatch: X:{}, y:{}".format(
+                self.x.shape,self.y.shape))
+        else:
+            return self.x.shape[0]
+
+
+    def __getitem__(self,index):
+        sample = {'features': self.x[index,:], 'traits': self.y[index, self.cur_trait]}
+        return sample
+
+
+class MLP(nn.Module):
     def __init__(self, input_size=500):
         super(MLP,self).__init__()
+        self.fc1 = nn.Linear(input_size,input_size)
+        self.fc2 = nn.Linear(input_size,100)
+        self.fc3 = nn.Linear(100,100)
+        self.fc4 = nn.Linear(100,1)
+
+
+    def forward(self,x):
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x =F.relu(x)
+        x = self.fc3(x)
+        x = F.relu(x)
+        x = self.fc4(x)
+        x =F.relu(x)
+        return x
+
+
+class NestedLinear(nn.Module):
+    def __init__(self, input_size=500):
+        super(NestedLinear,self).__init__()
         self.fc1 = nn.Linear(input_size,input_size)
         self.fc2 = nn.Linear(input_size,100)
         self.fc3 = nn.Linear(100,100)
@@ -105,7 +147,6 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
         scheduler = ReduceLROnPlateau(optimizer, 'min')
         losses = []
         while(i < 200):
-            plt.clf()
             for data in trainloader:
                 optimizer.zero_grad()
                 output = model(data['features'])
@@ -125,17 +166,12 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
                     loss_train =  cur_losses_train.sum()
                     loss_val = cur_losses_val.sum()
                     losses.append((loss_train.detach(), loss_val.detach()))
-                    # if plot_loss:
-                    #     writer.add_scalar(train_tag,loss_train.item(),global_step=i)
-                    #     writer.add_scalar(val_tag,loss_val.item(),global_step=i)
                 else:
                     output = model(data['features'])
                     cur_losses_train = [loss_list[i](output_train[i].flatten(),data_train[:]['traits'][:,i]) for i in range(len(loss_list))]
                     cur_losses_train = torch.stack(cur_losses_train)
                     loss_train =  cur_losses_train[~torch.isnan(cur_losses_train)].sum()
                     losses.append(loss_train)
-                    # if plot_loss:
-                    #     writer.add_scalar(train_tag,loss_train.item(), global_step=i)
             else:
                 cur_losses = [loss_list[i](output[i],data['traits'][i]) for i in range(len(loss_list))]
                 cur_losses = torch.stack(cur_losses)
@@ -147,15 +183,7 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
                     print("Loss at epoch {}: train: {}, validation: {}".format(i,loss_train, loss_val))
                 else:
                     print("Loss at epoch {}: {}".format(i,loss_tot))
-            # if i > 50:
-            #     avg_dec = sum([losses[i-j-1][0]-losses[i-j-2][0] for j in range(50)]) / 50
-            #     if plot_loss:
-            #         writer.add_scalar('avg_dec',avg_dec,global_step=i)
-            #     if avg_dec <= 0 and losses[i-1][1] >= losses[i-2][1]:
-            #         improved = False
             i += 1
-        # if plot_loss:
-        #     writer.close()
         if save_loss:
             if use_validation:
                 losses_train = [value for (value,_) in losses]
@@ -177,5 +205,3 @@ def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False
     return model.cpu(), loss_tot
 
 
-def integrated_gradients(model,input):
-    pass
