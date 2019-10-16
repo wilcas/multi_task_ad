@@ -10,7 +10,6 @@ import torch.utils.data
 import os
 import numpy as np
 import joblib
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class MDADData(torch.utils.data.Dataset):
     def __init__(self,x,y):
@@ -55,53 +54,50 @@ class SingleClassData(torch.utils.data.Dataset):
 
 
 class MLP(nn.Module):
-    def __init__(self, input_size=500):
+    def __init__(self, input_size=500,hidden_nodes=100,hidden_layers=3):
         super(MLP,self).__init__()
-        self.fc1 = nn.Linear(input_size,input_size)
-        self.fc2 = nn.Linear(input_size,100)
-        self.fc3 = nn.Linear(100,100)
-        self.fc4 = nn.Linear(100,1)
+        self.input_layer = nn.Linear(input_size,hidden_nodes)
+        self.hidden_layers = nn.ModuleList([nn.Linear(hidden_nodes,hidden_nodes) for _ in range(hidden_layers)])
+        self.output_layer = nn.Linear(hidden_nodes,1)
 
 
     def forward(self,x):
-        x = self.fc1(x)
+        x = self.input_layer(x)
         x = F.relu(x)
-        x = self.fc2(x)
-        x =F.relu(x)
-        x = self.fc3(x)
-        x = F.relu(x)
-        x = self.fc4(x)
-        x =F.relu(x)
+        for layer in self.hidden_layers:
+            x = layer(x)
+            x = F.relu(x)
+        x = self.output_layer(x)
         return x
 
 
 class NestedLinear(nn.Module):
-    def __init__(self, input_size=500):
+    def __init__(self, input_size=500, hidden_nodes=100,hidden_layers=3):
         super(NestedLinear,self).__init__()
-        self.fc1 = nn.Linear(input_size,input_size)
-        self.fc2 = nn.Linear(input_size,100)
-        self.fc3 = nn.Linear(100,100)
-        self.fc4 = nn.Linear(100,1)
+        self.input_layer = nn.Linear(input_size,hidden_nodes)
+        self.hidden_layers = nn.ModuleList([nn.Linear(hidden_nodes,hidden_nodes) for _ in range(hidden_layers)])
+        self.output_layer = nn.Linear(hidden_nodes,1)
 
 
     def forward(self,x):
-        x = self.fc1(x)
-        x = self.fc2(x)
-        x = self.fc3(x)
-        x = self.fc4(x)
+        x = self.input_layer(x)
+        for layer in self.hidden_layers:
+            x = layer(x)
+        x = self.output_layer(x)
         return x
 
 
 class MDAD(nn.Module):
-    def __init__(self, input_size=500, num_traits= 6):
+    def __init__(self, input_size=500, num_traits= 6, hidden_nodes=100, hidden_layers=3):
         super(MDAD, self).__init__()
-        net_list = [nn.Linear(input_size,input_size)]
-        net_list.append(nn.Linear(input_size, 100))
-        self.base_net = nn.ModuleList(net_list)
-        self.task_lists = nn.ModuleList([nn.ModuleList([nn.Linear(100,100), nn.Linear(100,1)]) for i in range(num_traits)])
-
+        self.input_layer = nn.Linear(input_size,hidden_nodes)
+        self.base_net = nn.ModuleList([nn.Linear(hidden_nodes,hidden_nodes) for _ in range(hidden_layers)])
+        self.task_lists = nn.ModuleList([nn.ModuleList([nn.Linear(hidden_nodes,hidden_nodes) for _ in range(hidden_layers)]) for _ in range(num_traits)])
+        self.outputs = nn.ModuleList([nn.Linear(hidden_nodes,1) for _ in range(num_traits)])
 
     def forward(self,x):
+        x = self.input_layer(x)
+        x = F.relu(x)
         for layer in self.base_net:
             x = layer(x)
             x = F.relu(x)
@@ -111,107 +107,62 @@ class MDAD(nn.Module):
             for layer in task:
                 cur_x = F.relu(layer(cur_x))
             result.append(cur_x)
-        return result
+        outputs = []
+        for i,out_layer in enumerate(self.outputs):
+            tmp_x = out_layer(result[i])
+            outputs.append(tmp_x)
 
-def train_MDAD(features, traits, verbose=False, plot_loss=False, save_loss=False, use_validation=False, save_model=False):
+        return outputs
+
+
+def train_MDAD(features, traits, params,verbose=False, save_loss=False):
     n = features.shape[0]
     num_traits = traits.shape[1]
     input_size = features.shape[1]
+    params.update({'input_size': input_size, 'num_traits': num_traits})
     loss_list = [nn.MSELoss() for i in range(num_traits)]
+    model = MDAD(**params).double()
+    if torch.cuda.is_available():
+        model = model.cuda()
+        features = features.cuda()
+        traits = traits.cuda()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    data = MDADData(features, traits)
+    data_train = data
+    trainloader = torch.utils.data.DataLoader(data,batch_size=10,shuffle=True)
+    i = 0
+    losses = []
+    while(i < 200):
+        for data in trainloader:
+            optimizer.zero_grad()
+            output = model(data['features'])
+            cur_losses = [loss_list[i](output[i][~torch.isnan(data['traits'][:,i])].flatten(),data['traits'][:,i][~torch.isnan(data['traits'][:,i])]) for i in range(len(loss_list))]
+            cur_losses = torch.stack(cur_losses)
+            cur_loss = cur_losses.sum()
+            cur_loss.backward()
+            optimizer.step()
+        if save_loss or verbose:
+            output = model(data_train[:]['features'])
+            cur_losses_train = [loss_list[i](output[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
+            cur_losses_train = torch.stack(cur_losses_train)
+            loss_train =  cur_losses_train.sum()
+            losses.append(loss_train)
 
-    if save_model and os.path.isfile(save_model):
-        model = MDAD(input_size, num_traits).double()
-        model.load_state_dict(torch.load(save_model))
-        model.eval()
-
-        output = model(features)
-
-        cur_losses = [loss_list[i](output[i].flatten(),traits[:,i]) for i in range(len(loss_list))]
-        loss_tot = torch.stack(cur_losses).sum()
-        return model, loss_tot
-    else:
-        model = MDAD(input_size,num_traits).double()
-        if torch.cuda.is_available():
-            model = model.cuda()
-            features = features.cuda()
-            traits = traits.cuda()
-        optimizer = optim.Adam(model.parameters(), lr=1e-4)
-        data = MDADData(features, traits)
-        if use_validation:
-            train_sz = int(n * 0.8)
-            val_sz = n - train_sz
-            data_train, data_val = torch.utils.data.random_split(data,(train_sz,val_sz))
-            trainloader = torch.utils.data.DataLoader(data_train,batch_size=10,shuffle=True)
-        else:
-            data_train = data
-            trainloader = torch.utils.data.DataLoader(data,batch_size=10,shuffle=True)
-        i = 0
-        scheduler = ReduceLROnPlateau(optimizer, 'min')
-        losses = []
-        while(i < 200):
-            for data in trainloader:
-                optimizer.zero_grad()
-                output = model(data['features'])
-                cur_losses = [loss_list[i](output[i][~torch.isnan(data['traits'][:,i])].flatten(),data['traits'][:,i][~torch.isnan(data['traits'][:,i])]) for i in range(len(loss_list))]
-                cur_losses = torch.stack(cur_losses)
-                cur_loss = cur_losses.sum()
-                cur_loss.backward()
-                optimizer.step()
-            if plot_loss or save_loss:
-                if use_validation:
-                    output_train = model(data_train[:]['features'])
-                    output_val = model(data_val[:]['features'])
-                    cur_losses_train = [loss_list[i](output_train[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
-                    cur_losses_val = [loss_list[i](output_val[i][~torch.isnan(data_val[:]['traits'][:,i])].flatten(),data_val[:]['traits'][:,i][~torch.isnan(data_val[:]['traits'][:,i])]) for i in range(len(loss_list))]
-                    cur_losses_train = torch.stack(cur_losses_train)
-                    cur_losses_val = torch.stack(cur_losses_val)
-                    loss_train =  cur_losses_train.sum()
-                    loss_val = cur_losses_val.sum()
-                    losses.append((loss_train.detach(), loss_val.detach()))
-                else:
-                    output = model(data['features'])
-                    cur_losses_train = [loss_list[i](output_train[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
-                    cur_losses_train = torch.stack(cur_losses_train)
-                    loss_train =  cur_losses_train.sum()
-                    losses.append(loss_train)
-            else:
-                output = model(data_train[:]['features'])
-                cur_losses_train = [loss_list[i](output[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
-                cur_losses_train = torch.stack(cur_losses_train)
-                loss_train =  cur_losses_train.sum()
-            scheduler.step(loss_train)
-
-            if verbose:
-                if use_validation:
-                    print("Loss at epoch {}: train: {}, validation: {}".format(i,loss_train, loss_val))
-                else:
-                    print("Loss at epoch {}: {}".format(i,loss_train))
-            i += 1
-        if save_loss:
-            if use_validation:
-                losses_train = [value for (value,_) in losses]
-                losses_val = [value for (_,value) in losses]
-                plt.plot(np.arange(i),np.array(list(losses_train)), label = "Training Loss")
-                plt.plot(np.arange(i),np.array(list(losses_val)), label = "Validation Loss")
-                plt.legend()
-            else:
-                plt.plot(np.arange(i),np.array(losses))
-                plt.xlabel("Epoch")
-                plt.ylabel("Loss")
-            plt.savefig(save_loss)
-        if save_model:
-            torch.save(model.state_dict(), save_model)
-    output = model(features)
-
-    cur_losses = [loss_list[i](output[i].flatten(),traits[:,i]) for i in range(len(loss_list))]
-    loss_tot = torch.stack(cur_losses).sum()
-    return model.cpu(), loss_tot
+        if verbose:
+            print("Loss at epoch {}: {}".format(i,loss_train))
+        i += 1
+    if save_loss:
+        plt.plot(np.arange(i),np.array(losses))
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.savefig(save_loss)
+        return model.cpu(), losses
+    return model.cpu()
 
 
 def run_single_training(trainloader, model, epochs=200):
     loss = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, 'min')
     i = 0
     while(i < epochs):
         for data in trainloader:
@@ -220,16 +171,16 @@ def run_single_training(trainloader, model, epochs=200):
             cur_loss = loss(output, data['traits'])
             cur_loss.backward()
             optimizer.step()
-        scheduler.step(cur_loss)
         i+= 1
 
 
-def train_single_models(features, traits, num_cores = 6, verbose=False, plot_loss=False, save_loss=False, save_model=False):
+def train_single_models(features, traits, params, num_cores = 6):
     n = features.shape[0]
     num_traits = traits.shape[1]
     input_size = features.shape[1]
-    linear_models = [NestedLinear(input_size=input_size).double() for _ in range(num_traits)]
-    mlp_models = [MLP(input_size=input_size).double() for _ in range(num_traits)]
+    params.update({"input_size": input_size})
+    linear_models = [NestedLinear(**params).double() for _ in range(num_traits)]
+    mlp_models = [MLP(**params).double() for _ in range(num_traits)]
     if torch.cuda.is_available():
         linear_models = [model.cuda() for model in linear_models]
         mlp_models = [model.cuda() for model in mlp_models]
