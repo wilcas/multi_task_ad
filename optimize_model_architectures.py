@@ -16,7 +16,7 @@ def main():
     kf = KFold(n_splits=5, shuffle=True)
     sizes = range(10,500,50)
     layers = range(1,5)
-    param_list = [{"input_size": 500, "hidden_nodes": size,"hidden_layers": layer} for size,layer in product(sizes,layers)]
+    param_list = [{"hidden_nodes": size,"hidden_layers": layer} for size,layer in product(sizes,layers)]
     result = []
     loss = torch.nn.MSELoss()
     for params in param_list:

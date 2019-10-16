@@ -116,12 +116,11 @@ class MDAD(nn.Module):
 
 
 def train_MDAD(features, traits, params,verbose=False, save_loss=False):
-    n = features.shape[0]
     num_traits = traits.shape[1]
     input_size = features.shape[1]
-    params.update({'input_size': input_size, 'num_traits': num_traits})
+    params.update({'input_size': input_size})
     loss_list = [nn.MSELoss() for i in range(num_traits)]
-    model = MDAD(**params).double()
+    model = MDAD(**params, num_traits=num_traits).double()
     if torch.cuda.is_available():
         model = model.cuda()
         features = features.cuda()
