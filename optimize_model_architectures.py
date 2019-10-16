@@ -17,8 +17,11 @@ def main():
     sizes = range(10,500,50)
     layers = range(1,5)
     param_list = [{"input_size": 500, "hidden_nodes": size,"hidden_layers": layer} for size,layer in product(sizes,layers)]
+    result = []
     loss = torch.nn.MSELoss()
     for params in param_list:
+        tmp_result = {}
+        tmp_result.update(params)
         losses = []
         for train,test in kf.split(exp_data):
             model = nets.train_MDAD(exp_data[train,:], phen_data[train,:],params)
@@ -26,7 +29,7 @@ def main():
             cur_loss = [loss(predictions[i].flatten(),phen_data[test,i].flatten()) for i in range(len(predictions))]
             losses.append(sum(cur_loss))
 
-        params['cv_loss_mdad'] = sum(losses) / float(len(losses))
+        tmp_result['cv_loss_mdad'] = sum(losses) / float(len(losses))
         linear_losses = []
         mlp_losses = []
         for train,test in kf.split(exp_data):
@@ -38,10 +41,11 @@ def main():
             linear_losses.append(linear_loss)
             mlp_losses.append(mlp_loss)
         for i in range(len(linear_loss)):
-            params[f'cv_loss_linear_{i}'] = sum([losses[i] for losses in linear_losses ]) / float(len(linear_losses))
-            params[f'cv_loss_mlp_{i}'] = sum([losses[i] for losses in mlp_losses ]) / float(len(mlp_losses))
+            tmp_result[f'cv_loss_linear_{i}'] = sum([losses[i] for losses in linear_losses ]) / float(len(linear_losses))
+            tmp_result[f'cv_loss_mlp_{i}'] = sum([losses[i] for losses in mlp_losses ]) / float(len(mlp_losses))
+        result.append(tmp_result)
     with open('cv_data.csv', 'w') as f:
-        writer = csv.DictWriter(f, fieldnames = list(params[0].keys()))
+        writer = csv.DictWriter(f, fieldnames = list(tmp_result[0].keys()))
         writer.writeheader()
         writer.writerows(params)
     return 0
