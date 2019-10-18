@@ -115,7 +115,7 @@ class MDAD(nn.Module):
         return outputs
 
 
-def train_MDAD(features, traits, params,verbose=False, save_loss=False):
+def train_MDAD(features, traits, params,epochs=200,verbose=False, save_loss=False,lr=1e-4, batch_size=10):
     num_traits = traits.shape[1]
     input_size = features.shape[1]
     params.update({'input_size': input_size})
@@ -125,24 +125,24 @@ def train_MDAD(features, traits, params,verbose=False, save_loss=False):
         model = model.cuda()
         features = features.cuda()
         traits = traits.cuda()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     data = MDADData(features, traits)
     data_train = data
-    trainloader = torch.utils.data.DataLoader(data,batch_size=10,shuffle=True)
+    trainloader = torch.utils.data.DataLoader(data,batch_size=batch_size,shuffle=True)
     i = 0
     losses = []
-    while(i < 200):
+    while(i < epochs):
         for data in trainloader:
             optimizer.zero_grad()
             output = model(data['features'])
-            cur_losses = [loss_list[i](output[i][~torch.isnan(data['traits'][:,i])].flatten(),data['traits'][:,i][~torch.isnan(data['traits'][:,i])]) for i in range(len(loss_list))]
+            cur_losses = [loss_list[i](output[i][~torch.isnan(data['traits'][:,i])].flatten(),data['traits'][:,i][~torch.isnan(data['traits'][:,i])].flatten()) for i in range(len(loss_list))]
             cur_losses = torch.stack(cur_losses)
             cur_loss = cur_losses.sum()
             cur_loss.backward()
             optimizer.step()
         if save_loss or verbose:
             output = model(data_train[:]['features'])
-            cur_losses_train = [loss_list[i](output[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])]) for i in range(len(loss_list))]
+            cur_losses_train = [loss_list[i](output[i][~torch.isnan(data_train[:]['traits'][:,i])].flatten(),data_train[:]['traits'][:,i][~torch.isnan(data_train[:]['traits'][:,i])].flatten()) for i in range(len(loss_list))]
             cur_losses_train = torch.stack(cur_losses_train)
             loss_train =  cur_losses_train.sum()
             losses.append(loss_train)
@@ -159,18 +159,18 @@ def train_MDAD(features, traits, params,verbose=False, save_loss=False):
     return model.cpu()
 
 
-def run_single_training(trainloader, model, epochs=200):
+def run_single_training(trainloader, model, epochs=200, lr= 1e-4):
     loss = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     i = 0
     while(i < epochs):
         for data in trainloader:
             optimizer.zero_grad()
             output = model(data['features'])
-            cur_loss = loss(output, data['traits'])
+            cur_loss = loss(output.flatten(), data['traits'].flatten())
             cur_loss.backward()
             optimizer.step()
-        i+= 1
+        i += 1
 
 
 def train_single_models(features, traits, params, num_cores = 6):
@@ -196,3 +196,22 @@ def train_single_models(features, traits, params, num_cores = 6):
     linear_models = [linear.cpu() for linear in linear_models]
     mlp_models = [mlp.cpu() for mlp in mlp_models]
     return linear_models, mlp_models
+
+
+def train_one_model(features,traits,params,model_type, which_trait,epochs=200, batch_size=10, lr= 1e-4):
+    num_traits = traits.shape[1]
+    input_size = features.shape[1]
+    params.update({"input_size": input_size})
+    if model_type == "mlp":
+        model = MLP(**params).double()
+    else:
+        model = NestedLinear(**params).double()
+    if torch.cuda.is_available():
+        model = model.cuda()
+        features = features.cuda()
+        traits = traits.cuda()
+    i = which_trait
+    data = SingleClassData(features[~torch.isnan(traits[:,i]),:], traits[~torch.isnan(traits[:,i]),:], i)
+    trainloader = torch.utils.data.DataLoader(data,batch_size=batch_size,shuffle=True)
+    model = run_single_training(trainloader,model, epochs=epochs,lr=lr)
+    return model.cpu()
