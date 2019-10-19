@@ -45,7 +45,7 @@ def optimize_mdad(exp_data,phen_data):
             {
                 "name": "hidden_nodes",
                 "type": "range",
-                "bounds": [0, 500],
+                "bounds": [1, 500],
                 "value_type": "int"
             },
             {
@@ -106,7 +106,7 @@ def optimize_single_model(exp_data, phen_data, model_type, which_trait):
             {
                 "name": "hidden_nodes",
                 "type": "range",
-                "bounds": [0, 500],
+                "bounds": [1, 500],
                 "value_type": "int"
             },
             {

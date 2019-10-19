@@ -213,5 +213,5 @@ def train_one_model(features,traits,params,model_type, which_trait,epochs=200, b
     i = which_trait
     data = SingleClassData(features[~torch.isnan(traits[:,i]),:], traits[~torch.isnan(traits[:,i]),:], i)
     trainloader = torch.utils.data.DataLoader(data,batch_size=batch_size,shuffle=True)
-    model = run_single_training(trainloader,model, epochs=epochs,lr=lr)
+    run_single_training(trainloader,model, epochs=epochs,lr=lr)
     return model.cpu()
