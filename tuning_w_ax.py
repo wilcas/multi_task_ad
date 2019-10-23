@@ -6,28 +6,32 @@ from ax.utils.measurement.synthetic_functions import branin
 
 
 def mdad_loss(exp_data, phen_data,hidden_layers,hidden_nodes,lr, epochs, batch_size):
+    phen_train = phen_data[:200,:]
+    exp_train = exp_data[:200,:]
     params = {
         'hidden_layers': hidden_layers,
         'hidden_nodes': hidden_nodes
     }
-    model = nets.train_MDAD(exp_data,phen_data, params, epochs=epochs,lr=lr,batch_size=batch_size)
+    model = nets.train_MDAD(exp_train,phen_train, params, epochs=epochs,lr=lr,batch_size=batch_size)
     loss = torch.nn.MSELoss()
-    outputs = model(exp_data)
+    outputs = model(exp_data[200:,:])
     nans = [torch.isnan(phen_data[:,i]) for i in range(len(outputs))]
-    value = sum([loss(output.flatten()[~nans[i]],phen_data[:,i].flatten()[~nans[i]]) for i,output in enumerate(outputs)])
+    value = sum([loss(output.flatten()[~nans[i]],phen_data[200:,i].flatten()[~nans[i]]) for i,output in enumerate(outputs)])
     return {"MDAD": (value.detach().item(),0.0)}
 
 
 def single_model_loss(exp_data,phen_data,model_type, which_trait, hidden_layers,hidden_nodes,lr, epochs, batch_size):
+    phen_train = phen_data[:200,:]
+    exp_train = exp_data[:200,:]
     params = {
         'hidden_layers': hidden_layers,
         'hidden_nodes': hidden_nodes
     }
-    model = nets.train_one_model(exp_data, phen_data, params,model_type,which_trait, epochs=epochs,lr=lr,batch_size=batch_size)
+    model = nets.train_one_model(exp_train, phen_train, params,model_type,which_trait, epochs=epochs,lr=lr,batch_size=batch_size)
     loss = torch.nn.MSELoss()
-    output = model(exp_data)
+    outputs = model(exp_data[200:,:])
     nans = torch.isnan(phen_data[:, which_trait])
-    value = loss(output.flatten()[~nans],phen_data[:,i].flatten()[~nans])
+    value = loss(output.flatten()[~nans],phen_data[200:,which_trait].flatten()[~nans])
     return {f"{model_type}_trait{which_trait}": (value.detach().item(),0.0)}
 
 
@@ -86,7 +90,7 @@ def optimize_mdad(exp_data,phen_data):
             )
         )
     best_parameters, metrics = ax.get_best_parameters()
-    ax.get_trials_data_frame().sort_values('trial_index').to_csv("ax_parameter_tuning_MDAD.csv", index=False)
+    ax.get_trials_data_frame().sort_values('trial_index').to_csv("ax_parameter_tuning_MDAD_validation.csv", index=False)
     print(best_parameters)
     print(metrics)
     return 0
@@ -151,7 +155,7 @@ def optimize_single_model(exp_data, phen_data, model_type, which_trait):
 
 
     best_parameters, metrics = ax.get_best_parameters()
-    ax.get_trials_data_frame().sort_values('trial_index').to_csv(f"ax_parameter_tuning_{model_type}_trait{which_trait}.csv", index=False)
+    ax.get_trials_data_frame().sort_values('trial_index').to_csv(f"ax_parameter_tuning_{model_type}_trait{which_trait}_validation.csv", index=False)
     print(best_parameters)
     print(metrics)
 
@@ -164,7 +168,7 @@ def main():
     phen_samples, phen_data = phen_samples[phen_ord], phen_data[phen_ord,:]
     exp_data = torch.tensor(exp_data).double()[:300,:]
     phen_data = torch.tensor(phen_data).double()[:300,:]
-    optimize_mdad(exp_data, phen_data)
+    #optimize_mdad(exp_data, phen_data)
     for i in range(phen_data.shape[1]):
         optimize_single_model(exp_data,phen_data,"mlp",i)
         optimize_single_model(exp_data,phen_data,"nested_linear",i)
